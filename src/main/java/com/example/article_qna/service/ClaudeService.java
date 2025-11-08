@@ -11,7 +11,7 @@ import java.util.Map;
 public class ClaudeService {
 
     private static final String CLAUDE_API_URL = "https://api.anthropic.com/v1/complete";
-    private static final String API_KEY = "REPLACE_ME";
+    private static final String API_KEY = "CLAUDE_API_KEY";
 
     public String getAnswer(String articleContent, String question) {
         RestTemplate restTemplate = new RestTemplate();

@@ -7,8 +7,15 @@ import com.example.article_qna.model.QnaResponse;
 import com.example.article_qna.service.ClaudeService;
 import com.example.article_qna.service.EmbeddingService;
 import com.example.article_qna.utils.TextUtils;
+import org.jsoup.Jsoup;
+import org.jsoup.nodes.Document;
 
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 
 @RestController
 @RequestMapping("/api/qna")
@@ -23,37 +30,51 @@ public class ClaudeController {
     @PostMapping
     public QnaResponse getAnswer(@RequestBody QnaRequest request) {
         try {
-            // 1. Fetch and clean article text
-            String articleContent = request.getArticleUrl(); // placeholder for URL
-            // Fetch the HTML from URL
-            org.jsoup.nodes.Document doc = org.jsoup.Jsoup.connect(articleContent)
-                    .userAgent("Mozilla/5.0")
-                    .timeout(10_000)
-                    .get();
-            String rawText = doc.body().text();
-            String cleanedText = TextUtils.cleanText(rawText);
+            String articleText = fetchArticle(request.getArticleUrl()); // your JSoup + cleanText
+            List<String> chunks = TextUtils.chunkText(articleText, 200); // 200 words per chunk
 
-            // 2. Chunk the text
-            List<String> chunks = TextUtils.chunkText(cleanedText, 500);
-
-            // 3. Optionally, embed chunks (not used directly in Claude prompt here)
+            // store chunk embeddings
+            List<float[]> embeddings = new ArrayList<>();
             for (String chunk : chunks) {
-                embeddingService.getEmbedding(chunk); // store or precompute embeddings if needed
+                embeddings.add(embeddingService.getEmbedding(chunk));
             }
 
-            // 4. Combine chunks into one context for Claude (or select top-K later)
-            StringBuilder context = new StringBuilder();
-            for (String chunk : chunks) {
-                context.append(chunk).append("\n");
+            // embed the question
+            float[] questionEmbedding = embeddingService.getEmbedding(request.getQuestion());
+
+            // find top 3 most similar chunks
+            List<String> topChunks = new ArrayList<>();
+            Map<Float, String> scoreMap = new TreeMap<>(Collections.reverseOrder());
+            for (int i = 0; i < chunks.size(); i++) {
+                float sim = embeddingService.similarity(questionEmbedding, embeddings.get(i));
+                scoreMap.put(sim, chunks.get(i));
+            }
+            int count = 0;
+            for (String c : scoreMap.values()) {
+                topChunks.add(c);
+                count++;
+                if (count >= 3) break;
             }
 
-            // 5. Query Claude
-            String answer = claudeService.getAnswer(context.toString(), request.getQuestion());
+            // send top chunks + question to Claude
+            String prompt = "Use the following text to answer the question:\n" +
+                            String.join("\n", topChunks) +
+                            "\nQuestion: " + request.getQuestion() + "\nAnswer:";
+
+            String answer = claudeService.getAnswer(articleText, request.getQuestion());
             return new QnaResponse(answer);
 
         } catch (Exception e) {
-            e.printStackTrace();
-            return new QnaResponse("Error fetching or processing article: " + e.getMessage());
+            return new QnaResponse("Error: " + e.getMessage());
         }
     }
+
+
+    private String fetchArticle(String url) throws IOException {
+        Document doc = Jsoup.connect(url).get();
+        String text = doc.body().text(); // just the visible text
+        return TextUtils.cleanText(text);
+    }
+
+
 }
